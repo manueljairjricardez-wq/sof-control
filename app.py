@@ -347,4 +347,4 @@ with gr.Blocks() as app:
     )
     btn_logout.click(logout, outputs=[login_row, main_app_col, login_msg])
 
-app.launch(share=True, debug=True)
+app.launch(server_name="0.0.0.0", server_port=int(os.environ.get("PORT", 7860)), share=False)
