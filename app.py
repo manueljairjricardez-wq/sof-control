@@ -115,9 +115,25 @@ def guardar_cambios_tabla(df_modificado):
             if epp_nombre in inv:
                 inv[epp_nombre]["stock"] = nuevo_stock
         save_json(INVENTORY_FILE, inv)
-        return "¡Inventario actualizado correctamente!", obtener_dataframe_inventario()
+        return "¡Inventario actualizado correctamente!", obtener_dataframe_inventario(), gr.update(choices=list(inv.keys()))
     except Exception as e:
-        return f"Error: {str(e)}", obtener_dataframe_inventario()
+        return f"Error: {str(e)}", obtener_dataframe_inventario(), gr.update(choices=list(inv.keys()))
+
+def agregar_nuevo_material(nombre_item, stock_inicial, minimo_sugerido, dias_reemplazo):
+    if not nombre_item.strip():
+        return "Error: Ingrese el nombre del material.", obtener_dataframe_inventario(), gr.update()
+    inv, _ = load_data()
+    nombre_item = nombre_item.strip()
+    
+    inv[nombre_item] = {
+        "stock": int(stock_inicial),
+        "minimo": int(minimo_sugerido),
+        "reemplazo_dias": int(dias_reemplazo)
+    }
+    save_json(INVENTORY_FILE, inv)
+    
+    mensaje = f"¡Material '{nombre_item}' agregado con éxito ({stock_inicial} unidades)!"
+    return mensaje, obtener_dataframe_inventario(), gr.update(choices=list(inv.keys()), value=nombre_item)
 
 def registrar_asignacion(tipo_destino, receptor, item, cantidad):
     inv, asg = load_data()
@@ -195,16 +211,18 @@ def dar_de_baja_trabajador(nombre_busqueda):
     return f"¡Trabajador '{nombre_target}' dado de baja!", pd.DataFrame(columns=["Receptor", "Item", "Cantidad", "Fecha de Asignación", "Fecha Próxima de Reemplazo"]), obtener_directorio_trabajadores()
 
 def restaurar_desde_backup(file_obj):
-    if file_obj is None: return "Cargue un archivo JSON.", obtener_dataframe_inventario(), obtener_directorio_trabajadores()
+    inv, _ = load_data()
+    if file_obj is None: return "Cargue un archivo JSON.", obtener_dataframe_inventario(), obtener_directorio_trabajadores(), gr.update(choices=list(inv.keys()))
     try:
         file_path = file_obj.name if hasattr(file_obj, 'name') else file_obj
         with open(file_path, "r", encoding="utf-8") as f: data = json.load(f)
         if "inventario" in data and "asignaciones" in data:
             save_json(INVENTORY_FILE, data["inventario"])
             save_json(ASSIGNMENTS_FILE, data["asignaciones"])
-            return "¡Respaldo restaurado!", obtener_dataframe_inventario(), obtener_directorio_trabajadores()
-        else: return "Estructura inválida.", obtener_dataframe_inventario(), obtener_directorio_trabajadores()
-    except Exception as e: return f"Error: {str(e)}", obtener_dataframe_inventario(), obtener_directorio_trabajadores()
+            inv_nuevo, _ = load_data()
+            return "¡Respaldo restaurado!", obtener_dataframe_inventario(), obtener_directorio_trabajadores(), gr.update(choices=list(inv_nuevo.keys()))
+        else: return "Estructura inválida.", obtener_dataframe_inventario(), obtener_directorio_trabajadores(), gr.update(choices=list(inv.keys()))
+    except Exception as e: return f"Error: {str(e)}", obtener_dataframe_inventario(), obtener_directorio_trabajadores(), gr.update(choices=list(inv.keys()))
 
 def generar_pdf_reporte(periodo):
     inv, asg = load_data()
@@ -264,6 +282,8 @@ def get_image_base64(path):
 img_b64 = get_image_base64(LOGO_FILE)
 logo_html = f'<img src="data:image/jpeg;base64,{img_b64}" width="65" style="vertical-align:middle; display:inline-block; margin-right:15px; border-radius:8px;">' if img_b64 else ''
 
+inv_inicial, _ = load_data()
+
 with gr.Blocks() as app:
     gr.Markdown(f'<div style="display: flex; align-items: center; padding: 10px 0;">{logo_html}<div><h1 style="margin: 0; font-size: 26px; font-weight: bold;">SHARE OIL FLUIDS CONTROL (SOF CONTROL)</h1><h3 style="margin: 0; color: #a0a0a0; font-size: 14px;">Departamento de Seguridad Industrial - Control de EPP</h3></div></div>')
 
@@ -286,7 +306,18 @@ with gr.Blocks() as app:
                 tabla_inventario = gr.Dataframe(value=obtener_dataframe_inventario(), interactive=True, label="Inventario de EPP")
                 btn_guardar_tabla = gr.Button("💾 Guardar Cambios de Inventario", variant="primary")
                 out_msg = gr.Textbox(label="Estado del Sistema")
-                btn_guardar_tabla.click(guardar_cambios_tabla, inputs=[tabla_inventario], outputs=[out_msg, tabla_inventario])
+                btn_guardar_tabla.click(guardar_cambios_tabla, inputs=[tabla_inventario], outputs=[out_msg, tabla_inventario, item_asg := gr.Dropdown(choices=list(load_data()[0].keys()), label="Elemento / Talla EPP", value="Overol M (Mediana - Talla 38)")])
+                
+            with gr.TabItem("➕ Agregar Material Nuevo"):
+                gr.Markdown("### Registro Manual de Nuevos Artículos o Materiales (Ej. Extintores, Botiquines, etc.)")
+                with gr.Row():
+                    nuevo_nombre_item = gr.Textbox(label="Nombre del Artículo / Material", placeholder="Ej. Extintor PQS 9kg")
+                    nuevo_stock_inicial = gr.Number(label="Cantidad / Stock Inicial", value=10)
+                with gr.Row():
+                    nuevo_minimo = gr.Number(label="Stock Mínimo de Alerta", value=2)
+                    nuevo_dias_reemplazo = gr.Number(label="Días para Reemplazo Sugerido", value=365)
+                btn_agregar_material = gr.Button("💾 Registrar Nuevo Material en Inventario", variant="primary")
+                out_msg_material = gr.Textbox(label="Estado de Registro")
                 
             with gr.TabItem("👷 Asignaciones y Consultas"):
                 with gr.Row():
@@ -294,7 +325,7 @@ with gr.Blocks() as app:
                         gr.Markdown("### 1. Registrar Nueva Asignación")
                         tipo_dest = gr.Radio(choices=["Trabajador Individual", "Colaborador / Lote de Área"], label="Tipo de Destino", value="Trabajador Individual")
                         receptor_input = gr.Textbox(label="Nombre del Trabajador")
-                        item_asg = gr.Dropdown(choices=list(DEFAULT_INVENTORY.keys()), label="Elemento / Talla EPP", value="Overol M (Mediana - Talla 38)")
+                        item_asg = gr.Dropdown(choices=list(load_data()[0].keys()), label="Elemento / Talla EPP", value="Overol M (Mediana - Talla 38)")
                         cant_asg = gr.Number(label="Cantidad Asignada", value=1)
                         btn_registrar = gr.Button("Registrar Asignación y Descontar", variant="primary")
                         out_reg = gr.Textbox(label="Resultado de Asignación")
@@ -336,15 +367,23 @@ with gr.Blocks() as app:
                     gr.Markdown("### 🔄 Restaurar Sistema desde Respaldo")
                     file_input_backup = gr.File(label="Subir Backup_SOF_Control.json")
                     btn_restaurar = gr.Button("📂 Restaurar Datos", variant="secondary")
-                    btn_restaurar.click(restaurar_desde_backup, inputs=[file_input_backup], outputs=[out_restaurar_msg := gr.Textbox(label="Estado"), tabla_rep_inv := gr.Dataframe(value=obtener_dataframe_inventario()), tabla_directorio])
+                    btn_restaurar.click(restaurar_desde_backup, inputs=[file_input_backup], outputs=[out_restaurar_msg := gr.Textbox(label="Estado"), tabla_rep_inv := gr.Dataframe(value=obtener_dataframe_inventario()), tabla_directorio, item_asg])
                     
                 tabla_rep_inv = gr.Dataframe(value=obtener_dataframe_inventario(), label="Estado Actual del Inventario")
                 btn_generar_pdf.click(generar_pdf_reporte, inputs=[periodo_radio], outputs=[file_pdf, file_backup, tabla_rep_inv])
+
+    btn_agregar_material.click(
+        agregar_nuevo_material,
+        inputs=[nuevo_nombre_item, nuevo_stock_inicial, nuevo_minimo, nuevo_dias_reemplazo],
+        outputs=[out_msg_material, tabla_inventario, item_asg]
+    )
 
     btn_login.click(login, inputs=[user_input, pass_input], outputs=[login_row, main_app_col, lbl_sesion, login_msg]).then(
         lambda m: (gr.update(interactive="INVITADO" not in m), gr.update(visible="INVITADO" not in m), gr.update(visible="INVITADO" not in m), gr.update(visible="INVITADO" not in m), gr.update(visible="INVITADO" not in m)),
         inputs=[login_msg], outputs=[tabla_inventario, btn_guardar_tabla, col_asignar, row_botones_edicion, col_restaurar]
     )
     btn_logout.click(logout, outputs=[login_row, main_app_col, login_msg])
+
+app.launch(server_name="0.0.0.0", server_port=int(os.environ.get("PORT", 7860)), share=False)
 
 app.launch(server_name="0.0.0.0", server_port=int(os.environ.get("PORT", 7860)), share=False)
